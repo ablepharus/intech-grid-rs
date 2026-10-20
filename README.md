@@ -6,6 +6,7 @@ ranges, modes and whole-config dump/restore — without the Grid editor.
 
 * `crates/orb-intech-grid` — the library (`orb_intech_grid`).
 * `crates/gridctl` — the `gridctl` command line tool.
+* **[API.md](API.md) — full API and CLI reference with worked examples.**
 * `vendor/` — upstream sources used as the protocol reference
   ([grid-fw](https://github.com/intechstudio/grid-fw),
   [grid-protocol](https://github.com/intechstudio/grid-protocol)). Reference
@@ -43,8 +44,25 @@ gridctl dump -o backup.json        # back up the configuration
 gridctl load backup.json           # restore it
 
 gridctl led set 5 green --live      # light it now, change nothing stored
-gridctl exec 'ele[0]:glc(2,{{0,255,0,1}})'   # arbitrary Lua on the module
+
+gridctl models                     # every Intech module, no hardware needed
+gridctl models --supported
+
+gridctl live show 0-3              # read mode/min/max/sensitivity back
+gridctl live mode all relative     # absolute | relative | relative-signed
+gridctl live anim 0 3 1            # LED animation: rate, type (0 0 = steady)
+gridctl live anim-clear all
+
+gridctl firmware status            # version + any bootloader volume
+gridctl firmware validate fw.uf2   # check an image, writes nothing
+gridctl firmware update fw.uf2 --yes   # flash (destructive, needs --yes)
 ```
+
+Supported hardware: 47 hardware ids, 44 with a usable element layout —
+PO16, BU16, PBF4, EN16, EF44, OCTV, ZONA, VSN1L, VSN1R, VSN2 and TEK2.
+TEK1, PB44 and SOFT are identified but have no layout, because the firmware
+has none for them either and logs `Unknown Module`. See
+[API.md](API.md#supported-modules).
 
 Colours accept a name (`red`, `green`, `blue`, `yellow`, `purple`, `white`,
 `cyan`, `orange`, `pink`, `lila`, `teal`, `amber`, `off`), `#rrggbb`,
