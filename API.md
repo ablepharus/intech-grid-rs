@@ -398,16 +398,69 @@ sources; UF2 validation against the three real vendor images shipped in
 **Not verified**: the actual firmware flash (needs a module in bootloader
 mode and consent), and the live runtime paths below.
 
-### Known limitation: immediate scripts
+### Firmware feature matrix
 
-Immediate scripts — the `IMMEDIATE` class 0x085, used by `gridctl exec` and
-every `--live` flag — produced **no observable effect** on an EN16 running
-1.5.1: Lua `print` output never came back, `gms` emitted no MIDI, and
-`page_next` did not change the active page. Three independent channels, all
-silent.
+Grid firmware gained capabilities over time, and a module **silently ignores
+Lua it does not know** — a missing global raises an error inside the script,
+which then stores or runs but does nothing. The library checks the running
+version first and refuses with an explicit error instead.
 
-Everything that matters therefore goes through stored configuration, which is
-verified, or through MIDI for runtime changes. Treat `exec`, `--live` and
-`value set --via-immediate` as unverified on that firmware. The leading
-untested hypothesis is that the module gates these on an editor announcing
-itself with a `HEARTBEAT` of type 255, which this crate never sends.
+| Capability | Needs | EN16 @ 1.5.1 | EF44 @ 1.2.35 |
+|---|---|---|---|
+| Static config (CONFIG 0x060), LED colour, settings, dump/load | any | yes | yes |
+| LED animation (`glf` / `gls`) | any | yes | yes |
+| Immediate scripts (`IMMEDIATE` 0x085) | 1.5.0 | yes, **wrapper required** | **no handler at all** |
+| `rx_mode(..)` | 1.5.2 | no | no |
+| `midirx_register(..)` / `self:gmrr(..)` | 1.5.2 | no | no |
+
+Verified by diffing the firmware tags in `vendor/grid-fw`: `grid_decode.c` at
+`v1.2.39` contains no immediate handler, and `GRID_LUA_FNC_G_RX_MODE_short` /
+`GRID_LUA_FNC_G_MIDIRX_REGISTER_short` first appear at `v1.5.2`.
+
+### Root cause: why immediate scripts appeared dead
+
+Earlier bench runs saw immediate scripts do nothing on an EN16 at 1.5.1 —
+`print` produced no output, `gms` emitted no MIDI, `page_next` did not change
+the page. The cause is in the firmware, and it is not a mystery any more.
+
+`grid_decode_immediate_to_ui` at `v1.5.1` guards the script:
+
+```c
+char* script = &chunk[GRID_CLASS_IMMEDIATE_ACTIONSTRING_offset];
+if (strncmp(script, "<?lua ", 6) != 0) {
+  return 1;                                    /* dropped, no reply */
+}
+if (strncmp(&script[length - 3], " ?>", 3) != 0) {
+  return 1;                                    /* dropped, no reply */
+}
+```
+
+**Firmware up to 1.5.1 accepts only `<?lua … ?>`-wrapped immediate scripts.**
+From 1.5.2 the check is gone and the handler runs the bare string, where a
+wrapper would instead be a Lua syntax error. The packet was well formed — the
+class, offsets and checksum all matched, which is why there was no NAK — it
+was simply discarded at that guard.
+
+`Device::immediate` now frames the script to match the running firmware, so
+`--live` and `exec` are correct on both sides of 1.5.2, and on firmware older
+than 1.5.0 they are refused outright because no handler exists.
+
+Two consequences worth knowing:
+
+- The `midi bind` / `rx-mode` path, and therefore `value set` over MIDI, needs
+  **1.5.2 or newer**. On an older module those commands now fail with a clear
+  message rather than storing Lua that cannot run.
+- A script that *is* delivered but raises a Lua error leaves no trace on the
+  wire either: in 1.5.6 `grid_lua_dostring_begin` takes the Lua semaphore and
+  returns early on both `luaL_loadstring` and `lua_pcall` failure **without
+  releasing it**, so one bad snippet can wedge further Lua execution until the
+  module reboots. Prefer stored configuration for anything that must be
+  reliable, and power-cycle if live scripting stops responding.
+
+### Still unverified on hardware
+
+No module was attached when this was written, so these remain unproven here:
+the corrected immediate framing against a real 1.5.1 module, live knob-mode
+and animation changes, and the firmware flash itself. Everything above is
+either unit-tested, verified against the firmware sources, or was verified on
+hardware in an earlier session as noted.

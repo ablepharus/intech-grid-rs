@@ -37,7 +37,7 @@ pub mod snapshot;
 
 pub use action::ActionString;
 pub use color::Rgb;
-pub use device::{discover, Device, DeviceInfo, MidiRxBinding, PortInfo};
+pub use device::{discover, Device, DeviceInfo, Feature, MidiRxBinding, PortInfo};
 pub use error::{Error, Result};
 pub use firmware::{find_bootloader_volumes, BootloaderVolume, Uf2Image};
 pub use live::{ElementSettings, KnobMode, LedAnimation};

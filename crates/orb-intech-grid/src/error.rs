@@ -52,6 +52,15 @@ pub enum Error {
     #[error("device rejected the {0} request (NAK)")]
     Nak(&'static str),
 
+    #[error(
+        "this module's firmware {found} does not provide {feature}; it needs {needs} or newer"
+    )]
+    UnsupportedFirmware {
+        feature: &'static str,
+        found: String,
+        needs: &'static str,
+    },
+
     #[error("{0}")]
     Other(String),
 }

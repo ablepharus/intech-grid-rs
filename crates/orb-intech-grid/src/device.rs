@@ -568,16 +568,72 @@ impl Device {
     }
 
     /// Run a Lua snippet on the module right now, without storing anything.
+    ///
+    /// The script is framed to match the running firmware. Up to and
+    /// including 1.5.1 the handler refuses anything that is not wrapped:
+    ///
+    /// ```c
+    /// if (strncmp(script, "<?lua ", 6) != 0) { return 1; }
+    /// if (strncmp(&script[length - 3], " ?>", 3) != 0) { return 1; }
+    /// ```
+    ///
+    /// From 1.5.2 on the wrapper check is gone and the handler executes the
+    /// bare string, where a wrapper would instead be a Lua syntax error. So
+    /// the framing has to follow the version, which is why sending unwrapped
+    /// Lua to a 1.5.1 module silently did nothing.
+    ///
+    /// Firmware before 1.5.0 has no immediate handler at all and this call
+    /// is rejected rather than sent into the void.
     pub fn immediate(&mut self, lua: &str) -> Result<()> {
-        if lua.len() > ACTIONSTRING_MAXLENGTH {
+        if !self.supports(Feature::Immediate) {
+            return Err(Error::UnsupportedFirmware {
+                feature: "running a script immediately",
+                found: self.info.firmware.clone(),
+                needs: Feature::Immediate.since_str(),
+            });
+        }
+        let framed = if Self::immediate_needs_wrapper(self.firmware_triple()) {
+            format!("<?lua {lua} ?>")
+        } else {
+            lua.to_string()
+        };
+        if framed.len() > ACTIONSTRING_MAXLENGTH {
             return Err(Error::ActionTooLong {
-                len: lua.len(),
+                len: framed.len(),
                 max: ACTIONSTRING_MAXLENGTH,
             });
         }
-        let payload = format!("{len:04x}{lua}", len = lua.len());
+        let payload = format!("{len:04x}{framed}", len = framed.len());
         self.send(Body::new(class::IMMEDIATE, instr::EXECUTE, payload))?;
         Ok(())
+    }
+
+    /// Whether this firmware's immediate handler demands the `<?lua ... ?>`
+    /// wrapper. True for 1.5.0 and 1.5.1, false from 1.5.2 on.
+    pub(crate) fn immediate_needs_wrapper(version: (u8, u8, u8)) -> bool {
+        version < (1, 5, 2)
+    }
+
+    /// Whether the running firmware provides `feature`.
+    pub fn supports(&self, feature: Feature) -> bool {
+        self.firmware_triple() >= feature.since()
+    }
+
+    /// The running firmware version as `(major, minor, patch)`.
+    pub fn firmware_version(&self) -> (u8, u8, u8) {
+        self.firmware_triple()
+    }
+
+    /// Reject a call whose feature the running firmware lacks.
+    fn require(&self, feature: Feature) -> Result<()> {
+        if self.supports(feature) {
+            return Ok(());
+        }
+        Err(Error::UnsupportedFirmware {
+            feature: feature.as_str(),
+            found: self.info.firmware.clone(),
+            needs: feature.since_str(),
+        })
     }
 
     /// Reboot the module.
@@ -850,6 +906,10 @@ impl Device {
 
     /// Which MIDI message an element should follow, and what it should do.
     pub fn bind_midi_rx(&mut self, page: u8, element: u8, binding: &MidiRxBinding) -> Result<()> {
+        // midirx_register does not exist before 1.5.2, so writing this
+        // block to an older module would store Lua that raises an error at
+        // init instead of binding anything.
+        self.require(Feature::MidiRxBinding)?;
         let kind = self.module.element_kind(element)?;
         let p = kind.value_prefix().ok_or(Error::Unsupported {
             module: self.module.kind.as_str(),
@@ -897,12 +957,14 @@ impl Device {
     /// `0x04` handle-internal (the firmware's `grid_rx_features`). A module
     /// only acts on MIDI itself when handle-internal is set.
     pub fn set_rx_mode(&mut self, rx_type: u8, mode: u8) -> Result<()> {
+        self.require(Feature::RxMode)?;
         self.immediate(&format!("rx_mode({rx_type},{mode})"))
     }
 
     /// Persist an `rx_mode` call in the module's system init script, so the
     /// routing survives a power cycle.
     pub fn persist_rx_mode(&mut self, page: u8, rx_type: u8, mode: u8) -> Result<()> {
+        self.require(Feature::RxMode)?;
         let system = self.module.system_element();
         let raw = self.fetch_action(page, system, EventType::Init)?;
         let mut action = ActionString::parse(&raw);
@@ -1068,6 +1130,49 @@ impl Device {
     }
 }
 
+/// A firmware capability, with the release that introduced it.
+///
+/// Grid firmware gained features over time, and a module silently ignores
+/// Lua it does not know: calling a missing global raises an error inside the
+/// script, which stores or runs but does nothing useful. Checking first turns
+/// that into an explicit refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Feature {
+    /// `IMMEDIATE` class handling, i.e. running a script right now.
+    /// `grid_decode.c` has no immediate handler before 1.5.0.
+    Immediate,
+    /// `rx_mode(..)`, for routing incoming MIDI. Added in 1.5.2.
+    RxMode,
+    /// `midirx_register(..)` / `self:gmrr(..)` bindings. Added in 1.5.2.
+    MidiRxBinding,
+}
+
+impl Feature {
+    /// First firmware version that provides this feature.
+    pub fn since(self) -> (u8, u8, u8) {
+        match self {
+            Feature::Immediate => (1, 5, 0),
+            Feature::RxMode | Feature::MidiRxBinding => (1, 5, 2),
+        }
+    }
+
+    /// The same version, for messages.
+    pub fn since_str(self) -> &'static str {
+        match self {
+            Feature::Immediate => "1.5.0",
+            Feature::RxMode | Feature::MidiRxBinding => "1.5.2",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Feature::Immediate => "running a script immediately",
+            Feature::RxMode => "MIDI receive routing (rx_mode)",
+            Feature::MidiRxBinding => "MIDI receive bindings (midirx_register)",
+        }
+    }
+}
+
 /// A request to make an element follow an incoming MIDI message.
 ///
 /// `None` means "the firmware's automatic value", which is what the Grid
@@ -1129,6 +1234,36 @@ impl MidiRxBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn immediate_wrapping_follows_the_firmware_version() {
+        // 1.5.1's handler rejects anything not wrapped in `<?lua ... ?>`;
+        // 1.5.2 dropped the check and runs the bare string, where a wrapper
+        // would be a syntax error. Getting this backwards is why unwrapped
+        // scripts silently did nothing on a 1.5.1 EN16.
+        assert!(Device::immediate_needs_wrapper((1, 5, 0)));
+        assert!(Device::immediate_needs_wrapper((1, 5, 1)));
+        assert!(!Device::immediate_needs_wrapper((1, 5, 2)));
+        assert!(!Device::immediate_needs_wrapper((1, 5, 6)));
+        // Older lines never reach the wrapper question: they have no handler.
+        assert!(Device::immediate_needs_wrapper((1, 2, 35)));
+    }
+
+    #[test]
+    fn feature_gates_match_the_releases_that_added_them() {
+        assert_eq!(Feature::Immediate.since(), (1, 5, 0));
+        assert_eq!(Feature::RxMode.since(), (1, 5, 2));
+        assert_eq!(Feature::MidiRxBinding.since(), (1, 5, 2));
+
+        // The two modules on this bench, against each feature.
+        let en16 = (1u8, 5u8, 1u8); // EN16 RevD
+        let ef44 = (1u8, 2u8, 35u8); // EF44 RevD
+        assert!(en16 >= Feature::Immediate.since(), "EN16 has an immediate handler");
+        assert!(en16 < Feature::RxMode.since(), "EN16 predates rx_mode");
+        assert!(en16 < Feature::MidiRxBinding.since(), "EN16 predates midirx_register");
+        assert!(ef44 < Feature::Immediate.since(), "EF44 has no immediate handler");
+        assert!(ef44 < Feature::MidiRxBinding.since());
+    }
 
     #[test]
     fn automatic_binding_matches_the_firmware_signature() {
