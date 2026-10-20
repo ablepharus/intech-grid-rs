@@ -1,0 +1,413 @@
+# orb-intech-grid / gridctl — API and CLI reference
+
+A Rust library and CLI for configuring Intech Studio **Grid** controllers over
+their USB serial port: LED colour and animation, knob behaviour, MIDI
+bindings, whole-config backup/restore, and firmware updates.
+
+Everything here was transcribed from the open-source firmware
+([grid-fw](https://github.com/intechstudio/grid-fw)) and, where noted,
+verified against real hardware.
+
+- [Install and build](#install-and-build)
+- [CLI reference](#cli-reference)
+- [Library API](#library-api)
+- [Supported modules](#supported-modules)
+- [Firmware updates](#firmware-updates)
+- [Verified vs unverified](#verified-vs-unverified)
+
+---
+
+## Install and build
+
+The repo has no C toolchain of its own, so build inside a shell that provides
+a linker. The `orb` dev shell works:
+
+```bash
+nix develop ~/orb --command cargo build --release
+nix develop ~/orb --command cargo test
+./target/release/gridctl --help
+```
+
+---
+
+## CLI reference
+
+Conventions used everywhere:
+
+| Concept | Accepted forms |
+|---|---|
+| Element selector | `3`, `0-7`, `0,2,5`, `all` |
+| Colour | `red`, `#ff8800`, `ff8800`, `#f80`, `255,136,0`, `off` |
+| Page | `--page N`; defaults to the **active** page (the only page the firmware accepts writes for) |
+| Persistence | persistent by default; `--no-store` keeps it in RAM; `gridctl store` commits later |
+| Output | add `--json` to any command for machine-readable output |
+
+### Discovery and identity
+
+```bash
+# Which modules are attached?
+gridctl list
+# /dev/ttyACM0  EN16 RevD  firmware 1.5.1  17 elements, 16 LEDs
+
+# Full identity and element map of one module
+gridctl info
+# module      EN16 RevD
+# hwcfg       0xc1
+# firmware    1.5.1
+# elements    17 (16 LEDs)
+#   0-15    encoder
+#   16      system
+
+# Every module this tool knows — needs no hardware
+gridctl models
+gridctl models --supported        # only the ones with a usable layout
+gridctl --json models | jq '.[] | select(.kind=="EN16")'
+```
+
+### LED colour
+
+```bash
+gridctl led set 3 red             # one element, stored on the module
+gridctl led set all '#ff8800'     # every LED
+gridctl led set 0-7 blue          # a range
+gridctl led set 4 red --alpha 0.4 # dimmed on the device
+
+gridctl led get                   # read stored colours back
+gridctl led get 0-3
+
+gridctl led off 4                 # dark, stored
+gridctl led off all
+gridctl led clear all             # back to the module default colour
+
+gridctl led set 5 green --live    # light it now, stored config untouched
+```
+
+`led off` zeroes the colour in **every** event script the element owns, not
+just the one that reacts to turning it — an encoder also has a button event
+with its own colour block, so setting only one leaves the LED lighting up
+again as soon as it is pressed.
+
+### LED animation
+
+Maps to the firmware's `glf` (rate) and `gls` (type); `0 0` is steady.
+
+```bash
+gridctl live anim 0 3 1           # element 0: rate 3, type 1, stored
+gridctl live anim all 0 0         # steady again
+gridctl live anim 2 5 1 --live    # drive it now, nothing stored
+gridctl live anim 2 5 1 --layer 1 # pick the LED layer explicitly
+gridctl live anim-clear all       # remove the stored animation block
+```
+
+### Knob behaviour (absolute / relative)
+
+```bash
+gridctl live show                 # read mode/min/max/sensitivity back
+gridctl live show 0-3
+gridctl --json live show 0
+
+gridctl live mode all absolute          # value is a position, clamped to min..max
+gridctl live mode 0-3 relative          # re-centres to the middle on init
+gridctl live mode 0 relative-signed     # signed delta, DAW-style endless
+```
+
+The three modes are the firmware's own, from `grid_ui_encoder.c`:
+
+| Mode | Firmware value | Behaviour |
+|---|---|---|
+| `absolute` | 0 | Accumulates, clamped to `min..=max`. Nothing resets it. Default. |
+| `relative` | 1 | Same accumulation, but re-centred to `((max+1)+min)/2` on event init. |
+| `relative-signed` | 2 | Stores a signed delta in two's complement, clamped to `-range/2 ..= range/2-1`; initialises to `min`. |
+
+Elements without a movement mode (buttons, system) are skipped and reported,
+not silently ignored.
+
+### Individual settings
+
+```bash
+gridctl get 0                     # settings of element 0
+gridctl get 0 --raw               # ...plus the raw Lua it is stored as
+gridctl set all max 100           # friendly names: min, max, mode, sensitivity, velocity
+gridctl set 0 ema 127             # or a raw firmware short name
+```
+
+### Assigning a value from software
+
+```bash
+# One-time setup: let each element follow its own CC, then reload so the
+# init scripts install the bindings.
+gridctl midi bind all --channel 0 --command 176 --cc-base 20
+gridctl rx-mode 4 --persist
+gridctl reset
+
+# Now assign values; the LED follows and the next physical turn continues
+# from the assigned position.
+gridctl value set 0 50 --percent
+gridctl value set all 100 --percent
+gridctl value set 3 64                 # raw MIDI value 0-127
+```
+
+### MIDI bindings
+
+```bash
+gridctl midi bind all --cc-base 20     # element N listens on CC 20+N
+gridctl midi bind 0 --channel 0 --command 176 --cc 20
+gridctl midi bind 0-3 --led-only       # scale the LED, leave the value alone
+gridctl midi bind 0-3 --value-only     # move the value, leave the LED alone
+gridctl midi show all
+gridctl midi unbind all
+
+gridctl rx-mode 4 --persist   # 1=forward-from-usb 2=handle-external 4=handle-internal
+```
+
+### Backup and restore
+
+```bash
+gridctl dump -o backup.json       # the active page
+gridctl dump --page 0 --page 1 -o two-pages.json
+gridctl load backup.json          # writes only what differs
+gridctl load - < backup.json
+```
+
+### Pages and lifecycle
+
+```bash
+gridctl store                     # commit the active page to memory
+gridctl discard                    # drop unsaved changes
+gridctl clear-page                 # reset the page to firmware defaults
+gridctl reset                      # reboot the module
+gridctl exec 'ele[0]:glc(2,{{255,0,0,1}})'   # raw Lua (see caveat below)
+```
+
+### Firmware
+
+```bash
+gridctl firmware status           # current version + any bootloader volume
+gridctl firmware validate fw.uf2  # check an image, writes nothing
+gridctl firmware update fw.uf2    # dry run: shows what it would do
+gridctl firmware update fw.uf2 --yes   # actually flash (destructive)
+```
+
+---
+
+## Library API
+
+Add it as a path dependency:
+
+```toml
+[dependencies]
+orb-intech-grid = { path = "../config_inttech/crates/orb-intech-grid" }
+```
+
+### Open a module and read its identity
+
+```rust
+use orb_intech_grid::Device;
+
+let mut dev = Device::open_single()?;           // or Device::open(Path::new("/dev/ttyACM0"))
+println!("{} firmware {}", dev.info().module, dev.info().firmware);
+let page = dev.active_page()?;
+# Ok::<(), orb_intech_grid::Error>(())
+```
+
+### LED colour, persistent and live
+
+```rust
+use orb_intech_grid::{Device, Rgb};
+
+let mut dev = Device::open_single()?;
+let page = dev.active_page()?;
+
+// Persistent: edit the stored config, then commit it.
+dev.set_led_color(page, 3, "#ff0000".parse()?, 1.0)?;
+dev.store_page()?;
+
+// Every event of the element, so it stays dark when pressed too.
+dev.set_led_off(page, 3)?;
+
+// Live: light it now, stored config untouched.
+dev.flash_led(3, Rgb::new(0, 255, 0), None)?;
+dev.flash_led_value(3, 200, None)?;
+# Ok::<(), orb_intech_grid::Error>(())
+```
+
+### Knob behaviour
+
+```rust
+use orb_intech_grid::{Device, KnobMode};
+
+let mut dev = Device::open_single()?;
+let page = dev.active_page()?;
+
+// Read before writing: None means "element default".
+let s = dev.element_settings(page, 0)?;
+println!("mode={:?} min={:?} max={:?}", s.mode, s.min, s.max);
+
+dev.set_knob_mode(page, 0, KnobMode::RelativeSigned)?;
+dev.set_element_setting(page, 0, "ema", 100)?;
+dev.store_page()?;
+# Ok::<(), orb_intech_grid::Error>(())
+```
+
+### LED animation
+
+```rust
+use orb_intech_grid::{Device, LedAnimation};
+
+let mut dev = Device::open_single()?;
+let page = dev.active_page()?;
+
+dev.set_led_animation(page, 0, LedAnimation::new(3, 1), None)?;
+dev.store_page()?;
+
+dev.set_led_animation(page, 0, LedAnimation::STEADY, None)?;   // stop animating
+dev.flash_led_animation(0, LedAnimation::new(5, 1), None)?;    // right now
+# Ok::<(), orb_intech_grid::Error>(())
+```
+
+### The model table (no hardware needed)
+
+```rust
+use orb_intech_grid::module::{Module, MODULES};
+
+// Identify a module from the hwcfg byte in its heartbeat.
+let m = Module::from_hwcfg(0xc1)?;
+assert_eq!(m.name(), "EN16 RevD");
+assert_eq!(m.element_count(), 17);          // 16 encoders + system
+assert_eq!(m.led_elements().count(), 16);
+
+// Or walk everything this crate knows.
+let supported = MODULES.iter().filter(|m| m.layout_known()).count();
+assert_eq!(MODULES.len(), 47);
+assert_eq!(supported, 44);
+# Ok::<(), orb_intech_grid::Error>(())
+```
+
+### Backup and restore
+
+```rust
+use orb_intech_grid::{snapshot, Device, Snapshot};
+
+let mut dev = Device::open_single()?;
+let page = dev.active_page()?;
+
+let snap = snapshot::dump(&mut dev, &[page])?;
+std::fs::write("backup.json", snap.to_json()?)?;
+
+let restored = Snapshot::from_json(&std::fs::read_to_string("backup.json")?)?;
+let report = snapshot::apply(&mut dev, &restored)?;   // writes only differences
+println!("{} written, {} already matched", report.written.len(), report.unchanged);
+# Ok::<(), orb_intech_grid::Error>(())
+```
+
+### Firmware images
+
+```rust
+use orb_intech_grid::firmware::{self, Uf2Image};
+use std::path::Path;
+
+// Validation is pure and needs no device.
+let img = Uf2Image::open(Path::new("grid.uf2"))?;
+println!("{} blocks, family 0x{:08x}", img.blocks, img.family_id);
+
+// Flashing requires the module to be in its bootloader.
+for vol in firmware::find_bootloader_volumes()? {
+    let written = firmware::flash(&vol, &img)?;   // destructive
+    println!("wrote {written} bytes to {}", vol.mount_point.display());
+}
+# Ok::<(), orb_intech_grid::Error>(())
+```
+
+---
+
+## Supported modules
+
+47 hardware ids, 44 with a usable element layout. Run `gridctl models` for the
+full table with revisions and variants.
+
+| Module | Elements | LEDs | Controls |
+|---|---|---|---|
+| PO16 | 17 | 16 | 16 potentiometers |
+| BU16 | 17 | 16 | 16 buttons |
+| PBF4 | 13 | 12 | 8 potentiometers/faders, 4 buttons |
+| EN16 | 17 | 16 | 16 rotary encoders |
+| EF44 | 9 | 8 | 4 rotary encoders, 4 faders |
+| OCTV | 22 | 21 | 8 rotary encoders, 13 buttons |
+| ZONA | 2 | 81 | touch surface, 81-LED matrix |
+| VSN1L / VSN1R | 15 | 18 | 8+4 buttons, 1 endless pot, 1 LCD |
+| VSN2 | 19 | 18 | 12+4 buttons, 2 LCDs |
+| TEK2 | 11 | 18 | 8 buttons, 2 endless pots |
+| TEK1, PB44, SOFT | — | — | identified only; see below |
+
+Every layout is transcribed from the matching `grid_module_*_ui_init` in
+`grid_module.c`, and the hwcfg→layout mapping from the
+`grid_hwcfg_module_is_*` predicates in `grid_sys.c` plus the dispatch chain in
+`esp32s3/main/grid_esp32s3.c`.
+
+**TEK1, PB44 and SOFT have no layout because the firmware has none either** —
+no `*_ui_init` exists and no dispatch branch matches, so the module itself
+logs `UI Init failed: Unknown Module`. This crate reports that instead of
+guessing.
+
+ZONA's 81 LEDs hang off a single touch element with no per-element value
+event, so they are not addressable through the colour API. `led_elements()`
+returns empty for it, deliberately.
+
+---
+
+## Firmware updates
+
+Grid modules on ESP32-S3 ship the **TinyUF2** bootloader, so updating is a
+file copy rather than a protocol exchange.
+
+1. **Enter the bootloader**: double-tap the module's reset button. It stops
+   being a serial port and appears as a USB drive named `GRID-S3`.
+   There is no software command for this — `RESET` (0x013) restarts the
+   application and `NVMERASE` (0x062) erases config; neither enters the
+   bootloader.
+2. **Validate** the image: `gridctl firmware validate grid.uf2`. This checks
+   the UF2 magic words, 512-byte block alignment, the declared block count
+   and the ESP32-S3 family id `0xc47e5767`, so a wrong file cannot reach the
+   volume. A raw `.bin` is rejected with a pointer to esptool.
+3. **Flash**: `gridctl firmware update grid.uf2 --yes`. Without `--yes` it
+   prints what it would do and exits. The volume disappears as the bootloader
+   reboots, which the tool treats as success rather than an I/O error.
+
+**Recovery.** A module with a damaged application can still be flashed over
+serial with `esptool.py`, as the vendor's `burn_test_firmware.sh` does:
+bootloader at `0x0`, partition table at `0x8000`, OTA data at `0xe000`, the
+application at `0x10000`, TinyUF2 at `0x410000`.
+
+---
+
+## Verified vs unverified
+
+Honesty about evidence, because some of this cannot be proven without hardware
+attached.
+
+**Verified on hardware** (EN16 RevD fw 1.5.1, EF44 RevD fw 1.2.35): module
+identification; config read/write; LED colour set/read/off, persisted and
+surviving a reboot; element settings round-trip; MIDI binding storage; dump
+and load in both directions.
+
+**Verified without hardware**: the full model table against the firmware
+sources; UF2 validation against the three real vendor images shipped in
+`vendor/grid-fw/esp32s3/bootloader/`; `gridctl models`; `firmware status` and
+`validate`.
+
+**Not verified**: the actual firmware flash (needs a module in bootloader
+mode and consent), and the live runtime paths below.
+
+### Known limitation: immediate scripts
+
+Immediate scripts — the `IMMEDIATE` class 0x085, used by `gridctl exec` and
+every `--live` flag — produced **no observable effect** on an EN16 running
+1.5.1: Lua `print` output never came back, `gms` emitted no MIDI, and
+`page_next` did not change the active page. Three independent channels, all
+silent.
+
+Everything that matters therefore goes through stored configuration, which is
+verified, or through MIDI for runtime changes. Treat `exec`, `--live` and
+`value set --via-immediate` as unverified on that firmware. The leading
+untested hypothesis is that the module gates these on an editor announcing
+itself with a `HEARTBEAT` of type 255, which this crate never sends.

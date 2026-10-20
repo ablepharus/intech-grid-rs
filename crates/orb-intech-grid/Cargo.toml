@@ -1,0 +1,12 @@
+[package]
+name = "orb-intech-grid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Intech Studio Grid configuration library: protocol, LED colors, element settings over USB serial"
+
+[dependencies]
+serialport = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

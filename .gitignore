@@ -1,0 +1,6 @@
+/target
+# Upstream reference clones, used read-only as the protocol source of truth.
+# Re-create with:
+#   git clone --depth 1 https://github.com/intechstudio/grid-fw       vendor/grid-fw
+#   git clone --depth 1 https://github.com/intechstudio/grid-protocol vendor/grid-protocol
+/vendor
