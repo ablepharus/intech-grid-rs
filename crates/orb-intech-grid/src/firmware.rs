@@ -572,10 +572,13 @@ mod tests {
     }
 
     #[test]
-    fn bootloader_instructions_name_the_physical_gesture() {
-        // There is no software path into the bootloader, so the guidance must
-        // say so rather than implying a command exists.
-        assert!(BOOTLOADER_INSTRUCTIONS.contains("Double-tap"));
+    fn bootloader_instructions_name_the_volume_we_look_for() {
+        // The wording itself is not pinned: an earlier version of this test
+        // asserted on "Double-tap", which was simply wrong about the hardware
+        // and made the test enforce the error. Only the volume label is
+        // checked, because that is the value `find_bootloader_volumes` matches
+        // on - instructions that name a different drive than the code looks
+        // for would send the user to the wrong place.
         assert!(BOOTLOADER_INSTRUCTIONS.contains(UF2_VOLUME_LABEL));
     }
 }
