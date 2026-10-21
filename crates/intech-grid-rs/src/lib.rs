@@ -1,5 +1,12 @@
-//! Configure Intech Studio Grid controllers (EN16, PBF4, PO16, BU16, ...)
-//! over their USB serial port.
+//! Unofficial Rust library for Intech Studio Grid controllers.
+//!
+//! Not affiliated with, authorised by, or endorsed by Intech Studio. The
+//! protocol handling here is derived from the vendor's published firmware
+//! and protocol sources, which are vendored under `vendor/` for reference.
+//!
+//! Static configuration, live runtime control and firmware updates over the
+//! module's USB serial port. Every hardware id the firmware defines is
+//! recognised (47), and 44 have a verified element layout.
 //!
 //! The protocol, module table, LED layers and action-string format in this
 //! crate were transcribed from the open-source firmware
@@ -9,7 +16,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use orb_intech_grid::{Device, Rgb};
+//! use intech_grid::{Device, Rgb};
 //!
 //! let mut dev = Device::open_single()?;
 //! println!("{} on firmware {}", dev.info().module, dev.info().firmware);
@@ -20,7 +27,7 @@
 //! // Store the colour so it survives a power cycle.
 //! dev.set_led_color(0, 3, "#ff0000".parse()?, 1.0)?;
 //! dev.store_page()?;
-//! # Ok::<(), orb_intech_grid::Error>(())
+//! # Ok::<(), intech_grid::Error>(())
 //! ```
 
 pub mod action;

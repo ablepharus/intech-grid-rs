@@ -3,13 +3,13 @@ name = "gridctl"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Command line configuration tool for Intech Studio Grid controllers"
+description = "Unofficial command line tool for Intech Studio Grid controllers. Not affiliated with or endorsed by Intech Studio."
 
 [[bin]]
 name = "gridctl"
 path = "src/main.rs"
 
 [dependencies]
-orb-intech-grid = { workspace = true }
+intech-grid-rs = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }

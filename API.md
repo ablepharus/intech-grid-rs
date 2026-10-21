@@ -1,4 +1,7 @@
-# orb-intech-grid / gridctl — API and CLI reference
+# intech-grid-rs / gridctl — API and CLI reference
+
+> **Unofficial.** Not affiliated with, authorised by, or endorsed by Intech
+> Studio. Derived from the vendor's published firmware and protocol sources.
 
 A Rust library and CLI for configuring Intech Studio **Grid** controllers over
 their USB serial port: LED colour and animation, knob behaviour, MIDI
@@ -225,24 +228,24 @@ Add it as a path dependency:
 
 ```toml
 [dependencies]
-orb-intech-grid = { path = "../config_inttech/crates/orb-intech-grid" }
+intech-grid-rs = { path = "../config_inttech/crates/intech-grid-rs" }
 ```
 
 ### Open a module and read its identity
 
 ```rust
-use orb_intech_grid::Device;
+use intech_grid::Device;
 
 let mut dev = Device::open_single()?;           // or Device::open(Path::new("/dev/ttyACM0"))
 println!("{} firmware {}", dev.info().module, dev.info().firmware);
 let page = dev.active_page()?;
-# Ok::<(), orb_intech_grid::Error>(())
+# Ok::<(), intech_grid::Error>(())
 ```
 
 ### LED colour, persistent and live
 
 ```rust
-use orb_intech_grid::{Device, Rgb};
+use intech_grid::{Device, Rgb};
 
 let mut dev = Device::open_single()?;
 let page = dev.active_page()?;
@@ -257,13 +260,13 @@ dev.set_led_off(page, 3)?;
 // Live: light it now, stored config untouched.
 dev.flash_led(3, Rgb::new(0, 255, 0), None)?;
 dev.flash_led_value(3, 200, None)?;
-# Ok::<(), orb_intech_grid::Error>(())
+# Ok::<(), intech_grid::Error>(())
 ```
 
 ### Knob behaviour
 
 ```rust
-use orb_intech_grid::{Device, KnobMode};
+use intech_grid::{Device, KnobMode};
 
 let mut dev = Device::open_single()?;
 let page = dev.active_page()?;
@@ -275,13 +278,13 @@ println!("mode={:?} min={:?} max={:?}", s.mode, s.min, s.max);
 dev.set_knob_mode(page, 0, KnobMode::RelativeSigned)?;
 dev.set_element_setting(page, 0, "ema", 100)?;
 dev.store_page()?;
-# Ok::<(), orb_intech_grid::Error>(())
+# Ok::<(), intech_grid::Error>(())
 ```
 
 ### LED animation
 
 ```rust
-use orb_intech_grid::{Device, LedAnimation};
+use intech_grid::{Device, LedAnimation};
 
 let mut dev = Device::open_single()?;
 let page = dev.active_page()?;
@@ -291,13 +294,13 @@ dev.store_page()?;
 
 dev.set_led_animation(page, 0, LedAnimation::STEADY, None)?;   // stop animating
 dev.flash_led_animation(0, LedAnimation::new(5, 1), None)?;    // right now
-# Ok::<(), orb_intech_grid::Error>(())
+# Ok::<(), intech_grid::Error>(())
 ```
 
 ### The model table (no hardware needed)
 
 ```rust
-use orb_intech_grid::module::{Module, MODULES};
+use intech_grid::module::{Module, MODULES};
 
 // Identify a module from the hwcfg byte in its heartbeat.
 let m = Module::from_hwcfg(0xc1)?;
@@ -309,13 +312,13 @@ assert_eq!(m.led_elements().count(), 16);
 let supported = MODULES.iter().filter(|m| m.layout_known()).count();
 assert_eq!(MODULES.len(), 47);
 assert_eq!(supported, 44);
-# Ok::<(), orb_intech_grid::Error>(())
+# Ok::<(), intech_grid::Error>(())
 ```
 
 ### Backup and restore
 
 ```rust
-use orb_intech_grid::{snapshot, Device, Snapshot};
+use intech_grid::{snapshot, Device, Snapshot};
 
 let mut dev = Device::open_single()?;
 let page = dev.active_page()?;
@@ -326,13 +329,13 @@ std::fs::write("backup.json", snap.to_json()?)?;
 let restored = Snapshot::from_json(&std::fs::read_to_string("backup.json")?)?;
 let report = snapshot::apply(&mut dev, &restored)?;   // writes only differences
 println!("{} written, {} already matched", report.written.len(), report.unchanged);
-# Ok::<(), orb_intech_grid::Error>(())
+# Ok::<(), intech_grid::Error>(())
 ```
 
 ### Firmware images
 
 ```rust
-use orb_intech_grid::firmware::{self, Uf2Image};
+use intech_grid::firmware::{self, Uf2Image};
 use std::path::Path;
 
 // Validation is pure and needs no device.
@@ -344,7 +347,7 @@ for vol in firmware::find_bootloader_volumes()? {
     let written = firmware::flash(&vol, &img)?;   // destructive
     println!("wrote {written} bytes to {}", vol.mount_point.display());
 }
-# Ok::<(), orb_intech_grid::Error>(())
+# Ok::<(), intech_grid::Error>(())
 ```
 
 ---

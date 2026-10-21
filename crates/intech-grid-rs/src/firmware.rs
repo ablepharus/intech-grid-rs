@@ -346,7 +346,7 @@ mod tests {
     ];
 
     fn repo_root() -> PathBuf {
-        // CARGO_MANIFEST_DIR is <root>/crates/orb-intech-grid
+        // CARGO_MANIFEST_DIR is <root>/crates/intech-grid-rs
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(|p| p.parent())

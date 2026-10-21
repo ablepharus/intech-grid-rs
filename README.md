@@ -1,10 +1,16 @@
-# config_inttech
+# intech-grid-rs
 
-A Rust library and CLI to configure Intech Studio **Grid** controllers (EN16,
-PBF4, PO16, BU16) over their USB serial port — LED colours, encoder/fader
-ranges, modes and whole-config dump/restore — without the Grid editor.
+A Rust library and CLI for Intech Studio **Grid** controllers over their USB
+serial port — LED colours, encoder/fader ranges and modes, live runtime
+control, whole-config dump/restore and firmware updates — without the Grid
+editor. Every hardware id the firmware defines is recognised (47), and 44 have
+a verified element layout.
 
-* `crates/orb-intech-grid` — the library (`orb_intech_grid`).
+> **Unofficial.** Not affiliated with, authorised by, or endorsed by Intech
+> Studio. Built by reading the vendor's published firmware and protocol
+> sources. Firmware flashing can brick hardware; see [API.md](API.md).
+
+* `crates/intech-grid-rs` — the library (`intech_grid`).
 * `crates/gridctl` — the `gridctl` command line tool.
 * **[API.md](API.md) — full API and CLI reference with worked examples.**
 * `vendor/` — upstream sources used as the protocol reference
@@ -160,7 +166,7 @@ GRID_DEBUG=1 gridctl led get 0
 ## Library
 
 ```rust
-use orb_intech_grid::{Device, Rgb};
+use intech_grid::{Device, Rgb};
 
 let mut dev = Device::open_single()?;
 println!("{} firmware {}", dev.info().module, dev.info().firmware);
@@ -185,10 +191,10 @@ Add a path dependency in `~/orb/Cargo.toml`:
 
 ```toml
 [workspace.dependencies]
-orb-intech-grid = { path = "../config_inttech/crates/orb-intech-grid" }
+intech-grid-rs = { path = "../config_inttech/crates/intech-grid-rs" }
 ```
 
-then `orb-intech-grid = { workspace = true }` in the crate that needs it
+then `intech-grid-rs = { workspace = true }` in the crate that needs it
 (`orb-intech` is the natural home). The library is sync and holds the serial
 port open; from async code, drive it on a blocking task.
 

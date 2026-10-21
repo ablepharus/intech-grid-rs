@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use orb_intech_grid::{firmware, live::KnobMode, snapshot, Device, ElementKind, LedAnimation, Rgb};
+use intech_grid::{firmware, live::KnobMode, snapshot, Device, ElementKind, LedAnimation, Rgb};
 use selector::Selector;
 
 #[derive(Parser)]
@@ -390,7 +390,7 @@ fn open(cli: &Cli) -> Result<Device, Box<dyn std::error::Error>> {
     let path = match &cli.port {
         Some(p) => p.clone(),
         None => {
-            let ports = orb_intech_grid::discover()?;
+            let ports = intech_grid::discover()?;
             match ports.len() {
                 1 => ports[0].path.clone(),
                 0 => return Err("no Intech Grid module found; is one connected?".into()),
@@ -552,7 +552,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_list(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let ports = orb_intech_grid::discover()?;
+    let ports = intech_grid::discover()?;
     if cli.json {
         let items: Vec<_> = ports
             .iter()
@@ -582,7 +582,7 @@ fn cmd_list(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             Ok(dev) => {
                 println!("{}", p.path.display());
                 for m in dev.bus() {
-                    let mod_info = orb_intech_grid::module::Module::from_hwcfg(m.hwcfg);
+                    let mod_info = intech_grid::module::Module::from_hwcfg(m.hwcfg);
                     let (elements, leds) = mod_info
                         .map(|x| (x.element_count().to_string(), x.led_count.to_string()))
                         .unwrap_or_else(|_| ("-".into(), "-".into()));
@@ -926,7 +926,7 @@ fn cmd_value_set(
         value.round() as u8
     };
 
-    let mut out = orb_intech_grid::MidiOut::open_single()?;
+    let mut out = intech_grid::MidiOut::open_single()?;
     let mut sent = Vec::new();
     for &e in &targets {
         let cc = cc_base
@@ -964,7 +964,7 @@ fn cmd_midi_bind(
     let page = resolve_page(&mut dev, write.page)?;
     let targets = element.resolve(dev.module())?;
 
-    let mut binding = orb_intech_grid::MidiRxBinding {
+    let mut binding = intech_grid::MidiRxBinding {
         channel,
         command,
         parameter: cc,
@@ -1231,7 +1231,7 @@ fn cmd_load(
         std::fs::read_to_string(file)?
     };
 
-    let snap = orb_intech_grid::Snapshot::from_json(&text)?;
+    let snap = intech_grid::Snapshot::from_json(&text)?;
     let mut dev = open(cli)?;
     if snap.hwcfg != dev.info().hwcfg {
         return Err(format!(
@@ -1259,7 +1259,7 @@ fn cmd_load(
 
 /// `gridctl models` - the model table, which needs no device.
 fn cmd_models(cli: &Cli, supported_only: bool) -> Result<(), Box<dyn std::error::Error>> {
-    use orb_intech_grid::module::MODULES;
+    use intech_grid::module::MODULES;
 
     let rows: Vec<_> = MODULES
         .iter()

@@ -1,6 +1,6 @@
 //! Parsing element selectors like `all`, `3`, `0-5` and `0,2,7`.
 
-use orb_intech_grid::Module;
+use intech_grid::Module;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Selector {

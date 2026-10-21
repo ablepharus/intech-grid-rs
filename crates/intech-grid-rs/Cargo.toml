@@ -1,0 +1,16 @@
+[package]
+name = "intech-grid-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Unofficial Rust library for Intech Studio Grid controllers: protocol, static configuration, live runtime control and firmware updates. Not affiliated with or endorsed by Intech Studio."
+
+[lib]
+name = "intech_grid"
+path = "src/lib.rs"
+
+[dependencies]
+serialport = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
