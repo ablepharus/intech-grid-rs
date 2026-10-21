@@ -9,6 +9,8 @@ license = "MIT"
 authors = ["ableph <alex@ableph.net>"]
 keywords = ["midi", "grid", "intech", "controller", "hardware"]
 categories = ["hardware-support", "command-line-utilities"]
+repository = "https://git.ableph.net/ableph/intech-grid-rs"
+homepage = "https://git.ableph.net/ableph/intech-grid-rs"
 
 [workspace.dependencies]
 intech-grid-rs = { path = "crates/intech-grid-rs" }

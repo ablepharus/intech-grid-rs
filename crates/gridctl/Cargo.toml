@@ -6,6 +6,8 @@ license.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
+repository.workspace = true
+homepage.workspace = true
 readme = "../../README.md"
 description = "Unofficial command line tool for Intech Studio Grid controllers. Not affiliated with or endorsed by Intech Studio."
 
