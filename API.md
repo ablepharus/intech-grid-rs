@@ -64,6 +64,34 @@ gridctl models --supported        # only the ones with a usable layout
 gridctl --json models | jq '.[] | select(.kind=="EN16")'
 ```
 
+### Multiple modules on one bus
+
+Grid modules chain physically and share a **single USB connection**. Only the
+module plugged into the host is the *master*; every module on the chain
+broadcasts its own heartbeat over that one serial port, identified by its
+position. A port is therefore a bus, not a device.
+
+```bash
+gridctl list
+# /dev/ttyACM0
+#   EN16 RevD      at 127,127 firmware 1.5.1    17 elements, 16 LEDs  (master)
+#   EF44 RevD      at 128,127 firmware 1.2.35    9 elements,  8 LEDs
+#   target one with --module X,Y
+
+gridctl info                       # the master, always deterministic
+gridctl --module 128,127 info      # the downstream module
+gridctl --module 128,127 led get   # its LEDs, not the master's
+gridctl --module 128,127 dump -o ef44.json
+```
+
+`--module X,Y` works on every command. Without it the master is used. The
+master sits at `127,127`, which the firmware also reads as "me"; a downstream
+module's own position routes the packet along the chain.
+
+This matters for correctness, not just convenience: a client that takes the
+first heartbeat it sees gets a *random* identity on a chained bus, and then
+writes land on the master while reporting another module's element layout.
+
 ### LED colour
 
 ```bash
@@ -176,7 +204,8 @@ gridctl store                     # commit the active page to memory
 gridctl discard                    # drop unsaved changes
 gridctl clear-page                 # reset the page to firmware defaults
 gridctl reset                      # reboot the module
-gridctl exec 'ele[0]:glc(2,{{255,0,0,1}})'   # raw Lua (see caveat below)
+gridctl exec 'ele[0]:glc(2,{{255,0,0,1}})'   # raw Lua on the module
+gridctl exec "print('emo='..ele[0]:emo())"   # prints come back to you
 ```
 
 ### Firmware
@@ -457,10 +486,31 @@ Two consequences worth knowing:
   module reboots. Prefer stored configuration for anything that must be
   reliable, and power-cycle if live scripting stops responding.
 
-### Still unverified on hardware
+### Verified on hardware
 
-No module was attached when this was written, so these remain unproven here:
-the corrected immediate framing against a real 1.5.1 module, live knob-mode
-and animation changes, and the firmware flash itself. Everything above is
-either unit-tested, verified against the firmware sources, or was verified on
-hardware in an earlier session as noted.
+Confirmed on a real two-module bus (EN16 RevD fw 1.5.1 as master at 127,127,
+EF44 RevD fw 1.2.35 downstream at 128,127):
+
+- **Live scripting works, and the wrapper is the reason it did not.** Same
+  packet, same session, only the framing differs:
+
+  ```
+  [WRAPPED   print('ULWMARK')]  marker=true   -> \x02 020 e ULWMARK \x03
+  [UNWRAPPED print('ULWMARK')]  marker=false  -> silently dropped
+  ```
+
+  Lua output comes back as a `DEBUGTEXT` (0x020) packet, which is why
+  `gridctl exec` can now print what a script produced.
+- **Live knob mode**, with an independent readback each step:
+  `emo=0` -> set relative -> `now=1` -> re-read `emo=1` -> restore `0`.
+- **Config round-trip, both dialects**: EN16 dump/load reported
+  `0 script(s) written, 67 already matched` and a re-dump was byte-identical;
+  EF44 reported `0 written, 31 matched`.
+- **Per-module routing**: the EF44 reads back 8 LEDs all `#000000` while the
+  master reads 16 LEDs with different colours, over the same port.
+- **Firmware status** reports the running version and the absence of a
+  bootloader volume.
+
+Still not executed: the firmware **flash** itself, which needs a module in
+bootloader mode and explicit consent. Validation, volume discovery and the
+`--yes` gate are verified; the write is not.

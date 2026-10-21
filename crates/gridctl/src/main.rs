@@ -6,9 +6,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use orb_intech_grid::{
-    firmware, live::KnobMode, snapshot, Device, ElementKind, LedAnimation, Rgb,
-};
+use orb_intech_grid::{firmware, live::KnobMode, snapshot, Device, ElementKind, LedAnimation, Rgb};
 use selector::Selector;
 
 #[derive(Parser)]
@@ -28,6 +26,13 @@ struct Cli {
     /// Print machine-readable JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
+
+    /// Target a specific module on the bus by position, e.g. --module 128,127.
+    ///
+    /// Modules chain over one USB connection; without this the module
+    /// attached to the host (the master) is used.
+    #[arg(long, global = true, value_name = "X,Y")]
+    module: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -369,11 +374,35 @@ fn resolve_page(dev: &mut Device, page: Option<u8>) -> Result<u8, Box<dyn std::e
     }
 }
 
+/// Parse `--module X,Y`.
+fn target(cli: &Cli) -> Result<Option<(u8, u8)>, Box<dyn std::error::Error>> {
+    let Some(s) = &cli.module else {
+        return Ok(None);
+    };
+    let (x, y) = s
+        .split_once(',')
+        .ok_or_else(|| format!("--module wants X,Y, got {s:?}"))?;
+    Ok(Some((x.trim().parse()?, y.trim().parse()?)))
+}
+
 fn open(cli: &Cli) -> Result<Device, Box<dyn std::error::Error>> {
-    Ok(match &cli.port {
-        Some(p) => Device::open(p)?,
-        None => Device::open_single()?,
-    })
+    let want = target(cli)?;
+    let path = match &cli.port {
+        Some(p) => p.clone(),
+        None => {
+            let ports = orb_intech_grid::discover()?;
+            match ports.len() {
+                1 => ports[0].path.clone(),
+                0 => return Err("no Intech Grid module found; is one connected?".into()),
+                n => {
+                    return Err(
+                        format!("{n} Grid connections present; pass --port to choose one").into(),
+                    )
+                }
+            }
+        }
+    };
+    Ok(Device::open_at(&path, want)?)
 }
 
 fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -479,8 +508,17 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         },
         Command::Exec { lua } => {
             let mut dev = open(cli)?;
-            dev.immediate(lua)?;
-            println!("ran {} bytes of Lua", lua.len());
+            // Show whatever the script printed: on this hardware that is the
+            // only confirmation that it actually ran.
+            let out = dev.immediate_output(lua)?;
+            if out.trim().is_empty() {
+                println!("ran {} bytes of Lua (no output)", lua.len());
+            } else {
+                print!("{out}");
+                if !out.ends_with('\n') {
+                    println!();
+                }
+            }
             Ok(())
         }
         Command::Store => {
@@ -519,10 +557,14 @@ fn cmd_list(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         let items: Vec<_> = ports
             .iter()
             .map(|p| {
+                let bus = Device::open(&p.path)
+                    .map(|d| d.bus().to_vec())
+                    .unwrap_or_default();
                 serde_json::json!({
                     "port": p.path,
                     "by_id": p.by_id,
                     "usb_serial": p.usb_serial,
+                    "modules": bus,
                 })
             })
             .collect();
@@ -534,18 +576,30 @@ fn cmd_list(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     for p in &ports {
-        // Identify each port, but do not fail the listing if one is busy.
+        // Each connection is a bus: list every module chained on it, not
+        // just whichever one answered first.
         match Device::open(&p.path) {
             Ok(dev) => {
-                let i = dev.info();
-                println!(
-                    "{}  {}  firmware {}  {} elements, {} LEDs",
-                    p.path.display(),
-                    i.module,
-                    i.firmware,
-                    i.element_count,
-                    i.led_count
-                );
+                println!("{}", p.path.display());
+                for m in dev.bus() {
+                    let mod_info = orb_intech_grid::module::Module::from_hwcfg(m.hwcfg);
+                    let (elements, leds) = mod_info
+                        .map(|x| (x.element_count().to_string(), x.led_count.to_string()))
+                        .unwrap_or_else(|_| ("-".into(), "-".into()));
+                    println!(
+                        "  {:<14} at {:>3},{:<3} firmware {:<8} {:>2} elements, {:>2} LEDs{}",
+                        m.module,
+                        m.position.0,
+                        m.position.1,
+                        m.firmware,
+                        elements,
+                        leds,
+                        if m.is_master { "  (master)" } else { "" }
+                    );
+                }
+                if dev.bus().len() > 1 {
+                    println!("  target one with --module X,Y");
+                }
             }
             Err(e) => println!("{}  (could not identify: {})", p.path.display(), e),
         }
@@ -1203,7 +1257,6 @@ fn cmd_load(
     Ok(())
 }
 
-
 /// `gridctl models` - the model table, which needs no device.
 fn cmd_models(cli: &Cli, supported_only: bool) -> Result<(), Box<dyn std::error::Error>> {
     use orb_intech_grid::module::MODULES;
@@ -1415,7 +1468,11 @@ fn cmd_live_anim(
     println!(
         "stored animation rate={rate} type={shape} on {} element(s){}",
         targets.len(),
-        if write.no_store { " in RAM" } else { " and saved it" }
+        if write.no_store {
+            " in RAM"
+        } else {
+            " and saved it"
+        }
     );
     Ok(())
 }
@@ -1511,7 +1568,10 @@ fn cmd_fw_validate(cli: &Cli, file: &std::path::Path) -> Result<(), Box<dyn std:
         );
         return Ok(());
     }
-    println!("valid UF2 image for ESP32-S3 (family 0x{:08x})", img.family_id);
+    println!(
+        "valid UF2 image for ESP32-S3 (family 0x{:08x})",
+        img.family_id
+    );
     println!("  path          {}", img.path.display());
     println!("  blocks        {}", img.blocks);
     println!("  size          {} bytes", img.bytes);
@@ -1560,7 +1620,9 @@ fn cmd_fw_update(
         img.path.display(),
         volume.mount_point.display()
     );
-    println!("the module reboots into the new firmware; re-run 'gridctl firmware status' to confirm");
+    println!(
+        "the module reboots into the new firmware; re-run 'gridctl firmware status' to confirm"
+    );
     let _ = cli;
     Ok(())
 }

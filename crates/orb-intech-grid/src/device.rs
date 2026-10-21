@@ -13,8 +13,8 @@ use crate::error::{Error, Result};
 use crate::frame::{self, Body, Frame, Header};
 use crate::module::{ElementKind, Module};
 use crate::proto::{
-    class, config_fields, heartbeat_fields, instr, layer, EventType, ACTIONSTRING_MAXLENGTH,
-    USB_PID, USB_VID,
+    class, config_fields, heartbeat_fields, heartbeat_type, instr, layer, EventType,
+    ACTIONSTRING_MAXLENGTH, DEFAULT_POSITION, USB_PID, USB_VID,
 };
 
 /// Default time to wait for a reply from the device.
@@ -46,6 +46,24 @@ pub struct PortInfo {
     pub by_id: Option<PathBuf>,
     /// USB serial string, when it could be determined.
     pub usb_serial: Option<String>,
+}
+
+/// One module found on a Grid bus, from its heartbeat.
+///
+/// Modules chain physically and share a single USB connection: only the
+/// module plugged into the host is the *master*, and every module on the
+/// chain broadcasts its own heartbeat over that one serial port. Each is
+/// identified by its position, so a port is a bus, not a device.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct BusModule {
+    /// Module position `(x, y)` as it reports in its heartbeat. The master
+    /// sits at `(127, 127)`, which the firmware also treats as "me".
+    pub position: (u8, u8),
+    pub hwcfg: u8,
+    pub module: String,
+    pub firmware: String,
+    /// True for the module attached to the host (heartbeat type 1).
+    pub is_master: bool,
 }
 
 /// What a module reports about itself in its heartbeat.
@@ -121,6 +139,10 @@ pub fn discover() -> Result<Vec<PortInfo>> {
 /// An open connection to one Grid module.
 pub struct Device {
     port: Box<dyn serialport::SerialPort>,
+    /// Position this device addresses its packets to.
+    target: (u8, u8),
+    /// Every module seen on the bus when the port was opened.
+    bus: Vec<BusModule>,
     /// Bytes read but not yet consumed as whole packets.
     pending: Vec<u8>,
     session: u8,
@@ -153,6 +175,11 @@ impl Device {
 
     /// Open a specific serial port and wait for the module to identify itself.
     pub fn open(path: &Path) -> Result<Self> {
+        Device::open_at(path, None)
+    }
+
+    /// Open a specific module on the bus by its position.
+    pub fn open_at(path: &Path, want: Option<(u8, u8)>) -> Result<Self> {
         let port = serialport::new(path.to_string_lossy(), 2_000_000)
             .timeout(Duration::from_millis(50))
             .open()?;
@@ -168,6 +195,8 @@ impl Device {
 
         let mut dev = Device {
             port,
+            target: (DEFAULT_POSITION, DEFAULT_POSITION),
+            bus: Vec::new(),
             pending: Vec::new(),
             session,
             next_id: 1,
@@ -191,29 +220,128 @@ impl Device {
             .find(|p| p.path == path)
             .and_then(|p| p.usb_serial);
 
-        let frame = dev.wait_for_body(class::HEARTBEAT, |_| Match::Yes, "heartbeat")?;
-        let hb = frame.body(class::HEARTBEAT).expect("matched above");
-        let hwcfg = hb.field_u8(heartbeat_fields::HWCFG)?;
-        let module = Module::from_hwcfg(hwcfg)?;
-        let firmware = format!(
-            "{}.{}.{}",
-            hb.field_u8(heartbeat_fields::VERSION_MAJOR)?,
-            hb.field_u8(heartbeat_fields::VERSION_MINOR)?,
-            hb.field_u8(heartbeat_fields::VERSION_PATCH)?
-        );
+        // Collect heartbeats from the whole bus before deciding which
+        // module this handle talks to. Taking the first heartbeat makes the
+        // identity random on a multi-module chain, and then every write goes
+        // to the master while reporting some other module's layout.
+        dev.bus = dev.scan_bus()?;
+        let chosen = Device::pick(&dev.bus, want)?.clone();
+        dev.adopt(chosen, path, usb_serial)?;
+        Ok(dev)
+    }
 
-        dev.module = module;
-        dev.info = DeviceInfo {
+    /// Choose a module from a scanned bus.
+    fn pick(bus: &[BusModule], want: Option<(u8, u8)>) -> Result<&BusModule> {
+        if bus.is_empty() {
+            return Err(Error::Timeout {
+                what: "heartbeat",
+                ms: DEFAULT_TIMEOUT.as_millis() as u64,
+            });
+        }
+        match want {
+            Some(pos) => bus.iter().find(|m| m.position == pos).ok_or_else(|| {
+                Error::Other(format!(
+                    "no module at position {},{} on this bus; found {}",
+                    pos.0,
+                    pos.1,
+                    bus.iter()
+                        .map(|m| format!("{} at {},{}", m.module, m.position.0, m.position.1))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            }),
+            // Default to the master: it is the one the host is attached to,
+            // and the only one "me"-addressed packets reach.
+            None => Ok(bus
+                .iter()
+                .find(|m| m.is_master)
+                .or_else(|| bus.iter().find(|m| m.position == (DEFAULT_POSITION, DEFAULT_POSITION)))
+                .unwrap_or(&bus[0])),
+        }
+    }
+
+    /// Adopt a scanned module as this handle's target.
+    fn adopt(
+        &mut self,
+        m: BusModule,
+        path: &Path,
+        usb_serial: Option<String>,
+    ) -> Result<()> {
+        let module = Module::from_hwcfg(m.hwcfg)?;
+        self.module = module;
+        self.target = m.position;
+        self.info = DeviceInfo {
             module: module.name(),
-            hwcfg,
-            firmware,
+            hwcfg: m.hwcfg,
+            firmware: m.firmware.clone(),
             element_count: module.element_count(),
             led_count: module.led_count,
-            position: (frame.header.sx, frame.header.sy),
+            position: m.position,
             port: path.to_path_buf(),
             usb_serial,
         };
-        Ok(dev)
+        Ok(())
+    }
+
+    /// Enumerate every module broadcasting on this bus.
+    ///
+    /// Listens long enough to catch at least one heartbeat from each module;
+    /// the firmware sends them every 250 ms.
+    pub fn scan_bus(&mut self) -> Result<Vec<BusModule>> {
+        use std::collections::BTreeMap;
+
+        let deadline = Instant::now() + Duration::from_millis(900);
+        let mut found: BTreeMap<(u8, u8), BusModule> = BTreeMap::new();
+        let mut chunk = [0u8; 4096];
+
+        while Instant::now() < deadline {
+            let (packets, rest) = frame::split_packets(&self.pending);
+            let rest_len = rest.len();
+            for raw in &packets {
+                let Ok(f) = frame::parse(raw) else { continue };
+                let Some(hb) = f.body(class::HEARTBEAT) else { continue };
+                let (Ok(hwcfg), Ok(ty)) = (
+                    hb.field_u8(heartbeat_fields::HWCFG),
+                    hb.field_u8(heartbeat_fields::TYPE),
+                ) else {
+                    continue;
+                };
+                let firmware = match (
+                    hb.field_u8(heartbeat_fields::VERSION_MAJOR),
+                    hb.field_u8(heartbeat_fields::VERSION_MINOR),
+                    hb.field_u8(heartbeat_fields::VERSION_PATCH),
+                ) {
+                    (Ok(a), Ok(b), Ok(c)) => format!("{a}.{b}.{c}"),
+                    _ => continue,
+                };
+                let position = (f.header.sx, f.header.sy);
+                let name = Module::from_hwcfg(hwcfg)
+                    .map(|m| m.name())
+                    .unwrap_or_else(|_| format!("unknown module 0x{hwcfg:02x}"));
+                found.entry(position).or_insert(BusModule {
+                    position,
+                    hwcfg,
+                    module: name,
+                    firmware,
+                    is_master: ty == heartbeat_type::GRIDMASTER,
+                });
+            }
+            let total = self.pending.len();
+            self.pending.drain(..total - rest_len);
+
+            match self.port.read(&mut chunk) {
+                Ok(0) => {}
+                Ok(n) => self.pending.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(found.into_values().collect())
+    }
+
+    /// Every module seen on this bus when the port was opened.
+    pub fn bus(&self) -> &[BusModule] {
+        &self.bus
     }
 
     /// How long to wait for replies.
@@ -249,9 +377,14 @@ impl Device {
         if self.next_id == 0 {
             self.next_id = 1;
         }
-        // CONFIG only accepts packets addressed at "me" (127,127); every
-        // other class this crate uses accepts that too.
-        Header::this_module(id, self.session)
+        // Address the module this handle targets. The master sits at
+        // 127,127, which the firmware reads as "me"; a downstream module's
+        // own position routes the packet along the chain to it.
+        Header {
+            dx: self.target.0,
+            dy: self.target.1,
+            ..Header::global(id, self.session)
+        }
     }
 
     /// Send one body addressed at the attached module, returning the message
@@ -634,6 +767,39 @@ impl Device {
             found: self.info.firmware.clone(),
             needs: feature.since_str(),
         })
+    }
+
+    /// Run a Lua snippet and return whatever it printed.
+    ///
+    /// The module broadcasts Lua output as a `DEBUGTEXT` (0x020) packet, so
+    /// `print(..)` is a usable readback channel for live state - the only one
+    /// there is, since runtime values are not exposed through CONFIG.
+    ///
+    /// Returns an empty string when the script printed nothing within the
+    /// timeout; a script that prints is the only way to tell "ran quietly"
+    /// from "was dropped".
+    pub fn immediate_output(&mut self, lua: &str) -> Result<String> {
+        self.clear_input();
+        self.immediate(lua)?;
+        match self.wait_for_body(class::DEBUGTEXT, |_| Match::Yes, "lua output") {
+            Ok(frame) => {
+                let body = frame.body(class::DEBUGTEXT).expect("matched above");
+                // DEBUGTEXT carries raw text from offset 5, with no length field.
+                Ok(body.tail(5).unwrap_or("").to_string())
+            }
+            Err(Error::Timeout { .. }) => Ok(String::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Read a Lua expression from the module, as text.
+    ///
+    /// Convenience over [`Device::immediate_output`]: wraps the expression in
+    /// a `print(..)` so live runtime state can be inspected, e.g.
+    /// `dev.eval("ele[0]:emo()")` for an encoder's current mode.
+    pub fn eval(&mut self, expression: &str) -> Result<String> {
+        let out = self.immediate_output(&format!("print({expression})"))?;
+        Ok(out.trim().to_string())
     }
 
     /// Reboot the module.
