@@ -4,3 +4,4 @@
 #   git clone --depth 1 https://github.com/intechstudio/grid-fw       vendor/grid-fw
 #   git clone --depth 1 https://github.com/intechstudio/grid-protocol vendor/grid-protocol
 /vendor
+backups/*.uf2
