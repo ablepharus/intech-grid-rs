@@ -444,17 +444,30 @@ Lua it does not know** — a missing global raises an error inside the script,
 which then stores or runs but does nothing. The library checks the running
 version first and refuses with an explicit error instead.
 
-| Capability | Needs | EN16 @ 1.5.1 | EF44 @ 1.2.35 |
-|---|---|---|---|
-| Static config (CONFIG 0x060), LED colour, settings, dump/load | any | yes | yes |
-| LED animation (`glf` / `gls`) | any | yes | yes |
-| Immediate scripts (`IMMEDIATE` 0x085) | 1.5.0 | yes, **wrapper required** | **no handler at all** |
-| `rx_mode(..)` | 1.5.2 | no | no |
-| `midirx_register(..)` / `self:gmrr(..)` | 1.5.2 | no | no |
+| Capability | Needs | ≤1.2.x | 1.5.0 – 1.5.1 | ≥1.5.2 |
+|---|---|---|---|---|
+| Static config (CONFIG 0x060), LED colour, settings, dump/load | any | yes | yes | yes |
+| LED animation (`glf` / `gls`) | any | yes | yes | yes |
+| Immediate scripts (`IMMEDIATE` 0x085) | 1.5.0 | **no handler at all** | yes, **wrapper required** | yes, **bare** |
+| `rx_mode(..)` | 1.5.2 | no | no | yes |
+| `midirx_register(..)` / `self:gmrr(..)` | 1.5.2 | no | no | yes |
+| Stored action strings | — | wrapped | wrapped | bare |
+
+Both modules on this bench now run **1.5.6**, so every row above is available;
+the table is kept because the library still supports older firmware and gates
+each call on the running version.
 
 Verified by diffing the firmware tags in `vendor/grid-fw`: `grid_decode.c` at
 `v1.2.39` contains no immediate handler, and `GRID_LUA_FNC_G_RX_MODE_short` /
-`GRID_LUA_FNC_G_MIDIRX_REGISTER_short` first appear at `v1.5.2`.
+`GRID_LUA_FNC_G_MIDIRX_REGISTER_short` first appear at `v1.5.2`. The stored
+action convention is visible in the firmware's own defaults:
+`GRID_ACTIONSTRING_ENCODER_INIT` is `"<?lua --[[@cb]] --[[Encoder Init]] ?>"`
+at `v1.5.1` and `"--[[@cb]]--[[Encoder Init]]"` at `v1.5.6`.
+
+A capability missing on a module is therefore a property of its **firmware
+version, not of the model**: an EF44 on 1.2.35 cannot run immediate scripts at
+all, and the same EF44 on 1.5.6 can. Updating the firmware is the fix, and
+`Device::supports` reports the current answer rather than a fixed one.
 
 ### Root cause: why immediate scripts appeared dead
 
