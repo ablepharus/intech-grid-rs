@@ -389,11 +389,21 @@ returns empty for it, deliberately.
 Grid modules on ESP32-S3 ship the **TinyUF2** bootloader, so updating is a
 file copy rather than a protocol exchange.
 
-1. **Enter the bootloader**: double-tap the module's reset button. It stops
-   being a serial port and appears as a USB drive named `GRID-S3`.
+1. **Enter the bootloader**: unplug every module, then **hold the utility
+   button on the side** of the one you are updating and keep holding it while
+   you plug in the USB cable. The LEDs go red, then green once the bootloader
+   has enumerated, and the module appears as a USB drive named `GRID-S3`
+   (or `GRID23`) instead of a serial port.
    There is no software command for this — `RESET` (0x013) restarts the
    application and `NVMERASE` (0x062) erases config; neither enters the
-   bootloader.
+   bootloader, and no bootloader-entry path exists anywhere in the firmware
+   sources.
+
+   Two vendor constraints apply: update modules **one at a time**, with only
+   that module connected, and keep **every module on the same firmware
+   version** — a chain running mixed versions is unsupported. A chained
+   downstream module therefore cannot be updated in place; connect it to USB
+   on its own.
 2. **Validate** the image: `gridctl firmware validate grid.uf2`. This checks
    the UF2 magic words, 512-byte block alignment, the declared block count
    and the ESP32-S3 family id `0xc47e5767`, so a wrong file cannot reach the

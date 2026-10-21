@@ -14,7 +14,8 @@
 //! There is no protocol class for it. `grid_protocol.h` defines `RESET`
 //! (0x013), which restarts the application, and `NVMERASE` (0x062), which
 //! erases stored configuration - neither enters the bootloader. On ESP32-S3
-//! TinyUF2 the entry gesture is a physical **double-tap of the reset button**,
+//! TinyUF2 the entry gesture is physical: **hold the utility button on the
+//! side of the module while plugging in the USB cable**,
 //! and this crate deliberately does not pretend otherwise: see
 //! [`BOOTLOADER_INSTRUCTIONS`].
 //!
@@ -48,12 +49,16 @@ pub const UF2_VOLUME_LABEL: &str = "GRID-S3";
 /// How to put a module into its bootloader, for display to a human.
 pub const BOOTLOADER_INSTRUCTIONS: &str = "\
 Put the module into its bootloader before updating:
-  1. Double-tap the reset button on the module (two quick presses).
-  2. The module disappears as a serial port and reappears as a USB drive
-     named GRID-S3.
-  3. Re-run the update; it copies the image onto that drive.
-There is no software command for this step - the bootloader is entered by the
-physical reset gesture.";
+  1. Unplug every module, so only the one being updated is connected.
+  2. Hold down the utility button on the SIDE of the module, and keep holding
+     it while you plug in the USB cable. The LEDs go red, then green once the
+     bootloader has enumerated.
+  3. The module disappears as a serial port and reappears as a USB drive
+     named GRID-S3 (or GRID23 / similar).
+  4. Re-run the update; it copies the image onto that drive.
+There is no software command for this step - the bootloader is entered by that
+physical gesture only. Update modules one at a time, and give every module the
+same firmware version: the vendor requires a matched set across a chain.";
 
 /// UF2 family IDs this crate recognises, for diagnostics.
 pub const KNOWN_FAMILIES: &[(u32, &str)] = &[
@@ -228,7 +233,11 @@ impl Uf2Image {
             }
         }
 
-        let Some(esp) = segments.iter().find(|s| s.family_id == ESP32S3_FAMILY_ID).cloned() else {
+        let Some(esp) = segments
+            .iter()
+            .find(|s| s.family_id == ESP32S3_FAMILY_ID)
+            .cloned()
+        else {
             let found = segments
                 .iter()
                 .map(|s| format!("{} (0x{:08x})", s.family(), s.family_id))
@@ -274,7 +283,9 @@ pub fn find_bootloader_volumes() -> Result<Vec<BootloaderVolume>> {
     for line in mounts.lines() {
         let mut parts = line.split_whitespace();
         let _dev = parts.next();
-        let Some(raw_mount) = parts.next() else { continue };
+        let Some(raw_mount) = parts.next() else {
+            continue;
+        };
         // /proc/mounts escapes spaces as \040.
         let mount = raw_mount.replace("\\040", " ");
         let path = PathBuf::from(&mount);
@@ -358,7 +369,11 @@ mod tests {
             let img = Uf2Image::open(&p).expect("vendor image should validate");
             assert_eq!(img.family_id, ESP32S3_FAMILY_ID, "{rel}");
             assert_eq!(img.bytes % UF2_BLOCK_SIZE as u64, 0, "{rel}");
-            assert_eq!(img.blocks as u64, img.bytes / UF2_BLOCK_SIZE as u64, "{rel}");
+            assert_eq!(
+                img.blocks as u64,
+                img.bytes / UF2_BLOCK_SIZE as u64,
+                "{rel}"
+            );
             assert!(img.payload_bytes > 0, "{rel}");
             checked += 1;
         }
@@ -367,7 +382,14 @@ mod tests {
 
     /// Build a minimal single-block UF2 so the rejection paths can be driven
     /// without shipping extra fixtures.
-    fn block(magic0: u32, magic1: u32, flags: u32, payload: u32, blocks: u32, family: u32) -> Vec<u8> {
+    fn block(
+        magic0: u32,
+        magic1: u32,
+        flags: u32,
+        payload: u32,
+        blocks: u32,
+        family: u32,
+    ) -> Vec<u8> {
         let mut b = vec![0u8; UF2_BLOCK_SIZE];
         b[0..4].copy_from_slice(&magic0.to_le_bytes());
         b[4..8].copy_from_slice(&magic1.to_le_bytes());
@@ -387,7 +409,12 @@ mod tests {
     /// A block carrying an explicit block number, for segment tests.
     fn numbered(block_no: u32, total: u32, family: u32) -> Vec<u8> {
         let mut b = block(
-            UF2_MAGIC_START0, UF2_MAGIC_START1, UF2_FLAG_FAMILY_ID, 256, total, family,
+            UF2_MAGIC_START0,
+            UF2_MAGIC_START1,
+            UF2_FLAG_FAMILY_ID,
+            256,
+            total,
+            family,
         );
         b[20..24].copy_from_slice(&block_no.to_le_bytes());
         b
@@ -397,7 +424,14 @@ mod tests {
     fn accepts_a_well_formed_single_block() {
         let img = Uf2Image::parse(
             p(),
-            &block(UF2_MAGIC_START0, UF2_MAGIC_START1, UF2_FLAG_FAMILY_ID, 256, 1, ESP32S3_FAMILY_ID),
+            &block(
+                UF2_MAGIC_START0,
+                UF2_MAGIC_START1,
+                UF2_FLAG_FAMILY_ID,
+                256,
+                1,
+                ESP32S3_FAMILY_ID,
+            ),
         )
         .unwrap();
         assert_eq!(img.blocks, 1);
@@ -448,7 +482,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("not a UF2 image"), "{err}");
-        assert!(err.contains("esptool"), "should point at the right tool: {err}");
+        assert!(
+            err.contains("esptool"),
+            "should point at the right tool: {err}"
+        );
     }
 
     #[test]
@@ -456,7 +493,14 @@ mod tests {
         // 0x1c5f21b0 is the ESP32-S2 family.
         let err = Uf2Image::parse(
             p(),
-            &block(UF2_MAGIC_START0, UF2_MAGIC_START1, UF2_FLAG_FAMILY_ID, 256, 1, 0x1c5f_21b0),
+            &block(
+                UF2_MAGIC_START0,
+                UF2_MAGIC_START1,
+                UF2_FLAG_FAMILY_ID,
+                256,
+                1,
+                0x1c5f_21b0,
+            ),
         )
         .unwrap_err()
         .to_string();
@@ -467,7 +511,14 @@ mod tests {
     fn rejects_a_missing_family_id() {
         let err = Uf2Image::parse(
             p(),
-            &block(UF2_MAGIC_START0, UF2_MAGIC_START1, 0, 256, 1, ESP32S3_FAMILY_ID),
+            &block(
+                UF2_MAGIC_START0,
+                UF2_MAGIC_START1,
+                0,
+                256,
+                1,
+                ESP32S3_FAMILY_ID,
+            ),
         )
         .unwrap_err()
         .to_string();
@@ -480,7 +531,12 @@ mod tests {
         assert!(short.contains("too short"), "{short}");
 
         let mut misaligned = block(
-            UF2_MAGIC_START0, UF2_MAGIC_START1, UF2_FLAG_FAMILY_ID, 256, 1, ESP32S3_FAMILY_ID,
+            UF2_MAGIC_START0,
+            UF2_MAGIC_START1,
+            UF2_FLAG_FAMILY_ID,
+            256,
+            1,
+            ESP32S3_FAMILY_ID,
         );
         misaligned.push(0);
         let err = Uf2Image::parse(p(), &misaligned).unwrap_err().to_string();
@@ -491,7 +547,14 @@ mod tests {
     fn rejects_a_lying_block_count() {
         let err = Uf2Image::parse(
             p(),
-            &block(UF2_MAGIC_START0, UF2_MAGIC_START1, UF2_FLAG_FAMILY_ID, 256, 99, ESP32S3_FAMILY_ID),
+            &block(
+                UF2_MAGIC_START0,
+                UF2_MAGIC_START1,
+                UF2_FLAG_FAMILY_ID,
+                256,
+                99,
+                ESP32S3_FAMILY_ID,
+            ),
         )
         .unwrap_err()
         .to_string();
