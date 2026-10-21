@@ -62,6 +62,37 @@ pub struct ActionString {
     pub epilogue: String,
 }
 
+/// The prefix firmware up to 1.5.1 stores action strings with.
+///
+/// `GRID_ACTION_PREFIX` in `grid_ui.h`.
+pub const ACTION_PREFIX: &str = "<?lua ";
+/// The matching suffix, `GRID_ACTION_SUFFIX`.
+pub const ACTION_SUFFIX: &str = " ?>";
+
+/// Re-frame a stored action string for the firmware it is being written to.
+///
+/// Firmware up to 1.5.1 stores actions wrapped in `<?lua ... ?>` - its own
+/// defaults are written that way, e.g.
+/// `GRID_ACTIONSTRING_ENCODER_INIT "<?lua --[[@cb]] --[[Encoder Init]] ?>"`.
+/// From 1.5.2 the defaults are bare: `"--[[@cb]]--[[Encoder Init]]"`.
+///
+/// This matters when a configuration dumped from one firmware is loaded onto
+/// another: writing a wrapped script to a module whose convention is bare, or
+/// the reverse, stores a script the firmware will not execute as intended.
+/// Returns `text` unchanged when it already matches `wrapped`.
+pub fn rewrap(text: &str, wrapped: bool) -> String {
+    let bare = text
+        .strip_prefix(ACTION_PREFIX)
+        .map(|head| head.strip_suffix(ACTION_SUFFIX).unwrap_or(head))
+        .unwrap_or(text);
+
+    if wrapped {
+        format!("{ACTION_PREFIX}{bare}{ACTION_SUFFIX}")
+    } else {
+        bare.to_string()
+    }
+}
+
 impl ActionString {
     /// Parse an action string into its blocks.
     ///
@@ -631,6 +662,30 @@ mod tests {
     }
 
     /// Exactly what an EN16 RevD on firmware 1.5.1 returns for element 0's
+    #[test]
+    fn rewrap_converts_between_the_two_storage_conventions() {
+        let wrapped = "<?lua --[[@cb]] --[[Encoder Init]] ?>";
+        let bare = "--[[@cb]] --[[Encoder Init]]";
+
+        // Down-convert for 1.5.2+, up-convert for 1.5.1 and older.
+        assert_eq!(rewrap(wrapped, false), bare);
+        assert_eq!(rewrap(bare, true), wrapped);
+
+        // Idempotent in both directions: already-correct text is untouched.
+        assert_eq!(rewrap(bare, false), bare);
+        assert_eq!(rewrap(wrapped, true), wrapped);
+        assert_eq!(rewrap(&rewrap(wrapped, false), true), wrapped);
+    }
+
+    #[test]
+    fn rewrap_leaves_a_script_without_the_wrapper_intact() {
+        // A hand-written script must not acquire or lose anything but the
+        // wrapper itself.
+        let hand = "print('hello') -- no markers here";
+        assert_eq!(rewrap(hand, false), hand);
+        assert_eq!(rewrap(hand, true), format!("<?lua {hand} ?>"));
+    }
+
     /// encoder event, including the `<?lua ?>` wrapper and its whitespace.
     const FROM_HARDWARE: &str = "<?lua --[[@sec]] self:emo(0) self:ev0(50) self:emi(0) self:ema(127) self:ese(100)--[[@sglc]] self:glc(-1,{{-1,-1,-1,1}}) self:glp(-1,-1)--[[@gms]] self:gms(-1,-1,-1,-1) ?>";
 

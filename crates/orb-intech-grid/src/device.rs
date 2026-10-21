@@ -747,6 +747,15 @@ impl Device {
         version < (1, 5, 2)
     }
 
+    /// Whether this firmware stores action strings wrapped in `<?lua ... ?>`.
+    ///
+    /// True up to 1.5.1, false from 1.5.2 on, matching the firmware's own
+    /// default action strings. Used when loading a configuration captured on
+    /// a different firmware version.
+    pub fn stores_wrapped_actions(&self) -> bool {
+        self.firmware_triple() < (1, 5, 2)
+    }
+
     /// Whether the running firmware provides `feature`.
     pub fn supports(&self, feature: Feature) -> bool {
         self.firmware_triple() >= feature.since()

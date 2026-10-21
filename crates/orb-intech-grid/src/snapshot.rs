@@ -116,15 +116,22 @@ pub struct ApplyReport {
 pub fn apply(dev: &mut Device, snapshot: &Snapshot) -> Result<ApplyReport> {
     let mut report = ApplyReport::default();
 
+    // A snapshot may come from a different firmware version than the module
+    // it is being written to. Firmware up to 1.5.1 stores action strings
+    // wrapped in `<?lua ... ?>` and 1.5.2+ stores them bare, so the wrapper
+    // is re-framed per target rather than copied verbatim.
+    let wrapped = dev.stores_wrapped_actions();
+
     for page in &snapshot.pages {
         for element in &page.elements {
             for event in &element.events {
+                let want = crate::action::rewrap(&event.action, wrapped);
                 let current = dev.fetch_action(page.page, element.index, event.event)?;
-                if current == event.action {
+                if current == want {
                     report.unchanged += 1;
                     continue;
                 }
-                dev.write_action(page.page, element.index, event.event, &event.action)?;
+                dev.write_action(page.page, element.index, event.event, &want)?;
                 report
                     .written
                     .push((page.page, element.index, event.event));
@@ -157,6 +164,28 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    #[test]
+    fn a_snapshot_is_reframed_for_the_target_firmware() {
+        use crate::action::rewrap;
+
+        // The 1.5.1 EN16 backup stores wrapped actions. Loading it onto a
+        // 1.5.6 module must write the bare form, and vice versa, or the
+        // module stores a script framed for the wrong firmware.
+        let from_151 = "<?lua --[[@cb]] --[[Encoder Init]] ?>";
+        assert_eq!(rewrap(from_151, false), "--[[@cb]] --[[Encoder Init]]");
+
+        let from_156 = "--[[@cb]]--[[Encoder Init]]";
+        assert_eq!(
+            rewrap(from_156, true),
+            "<?lua --[[@cb]]--[[Encoder Init]] ?>"
+        );
+
+        // Same-version loads must be a no-op, so the differential write
+        // count stays honest.
+        assert_eq!(rewrap(from_156, false), from_156);
+        assert_eq!(rewrap(from_151, true), from_151);
     }
 
     #[test]
