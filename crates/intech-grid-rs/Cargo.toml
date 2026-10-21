@@ -3,6 +3,10 @@ name = "intech-grid-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
 description = "Unofficial Rust library for Intech Studio Grid controllers: protocol, static configuration, live runtime control and firmware updates. Not affiliated with or endorsed by Intech Studio."
 
 [lib]

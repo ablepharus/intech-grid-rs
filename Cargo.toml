@@ -6,6 +6,9 @@ members = ["crates/intech-grid-rs", "crates/gridctl"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+authors = ["ableph <alex@ableph.net>"]
+keywords = ["midi", "grid", "intech", "controller", "hardware"]
+categories = ["hardware-support", "command-line-utilities"]
 
 [workspace.dependencies]
 intech-grid-rs = { path = "crates/intech-grid-rs" }
