@@ -224,11 +224,16 @@ gridctl firmware update fw.uf2 --yes   # actually flash (destructive)
 
 ## Library API
 
-Add it as a path dependency:
+Add it as a path dependency. Note the package name carries the `-rs` suffix
+while the import path does not:
 
 ```toml
 [dependencies]
-intech-grid-rs = { path = "../config_inttech/crates/intech-grid-rs" }
+intech-grid-rs = { path = "../intech-grid-rs/crates/intech-grid-rs" }
+```
+
+```rust
+use intech_grid::{Device, Rgb};   // lib name is intech_grid
 ```
 
 ### Open a module and read its identity

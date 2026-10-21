@@ -185,18 +185,24 @@ let (_event, action) = dev.element_action(0, 3)?;
 assert_eq!(action.setting("ema"), Some(100));
 ```
 
-### Using it from orb
+### Using it from another project
 
-Add a path dependency in `~/orb/Cargo.toml`:
+Add a path dependency, for example in `~/orb/Cargo.toml`:
 
 ```toml
 [workspace.dependencies]
-intech-grid-rs = { path = "../config_inttech/crates/intech-grid-rs" }
+intech-grid-rs = { path = "../intech-grid-rs/crates/intech-grid-rs" }
 ```
 
-then `intech-grid-rs = { workspace = true }` in the crate that needs it
-(`orb-intech` is the natural home). The library is sync and holds the serial
-port open; from async code, drive it on a blocking task.
+then `intech-grid-rs = { workspace = true }` in the crate that needs it. The
+import path is `intech_grid`, not the package name:
+
+```rust
+use intech_grid::{Device, Rgb};
+```
+
+The library is sync and holds the serial port open; from async code, drive it
+on a blocking task.
 
 ## How it works
 

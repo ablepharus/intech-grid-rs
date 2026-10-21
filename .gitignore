@@ -1,7 +1,12 @@
 /target
 # Upstream reference clones, used read-only as the protocol source of truth.
 # Re-create with:
-#   git clone --depth 1 https://github.com/intechstudio/grid-fw       vendor/grid-fw
+#   git clone https://github.com/intechstudio/grid-fw       vendor/grid-fw
 #   git clone --depth 1 https://github.com/intechstudio/grid-protocol vendor/grid-protocol
+# grid-fw needs its FULL tag history, not --depth 1: behaviour differs between
+# firmware releases (immediate-script framing, the 1.5.2 feature additions, the
+# stored action-string convention), and those are found by diffing tags. Older
+# tags also keep the sources under grid_common/ rather than common/src/c/.
+# An existing shallow clone: git -C vendor/grid-fw fetch --tags --unshallow
 /vendor
 backups/*.uf2
