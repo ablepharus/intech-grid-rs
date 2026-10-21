@@ -9,4 +9,6 @@
 # tags also keep the sources under grid_common/ rather than common/src/c/.
 # An existing shallow clone: git -C vendor/grid-fw fetch --tags --unshallow
 /vendor
-backups/*.uf2
+# Device configuration dumps and firmware images: local working data,
+# not part of the library.
+/backups
