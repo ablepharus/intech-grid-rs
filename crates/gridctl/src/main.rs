@@ -1,4 +1,7 @@
-//! `gridctl` - configure Intech Studio Grid controllers from the command line.
+//! `gridctl` - configure and control Intech Studio Grid controllers from the
+//! command line.
+//!
+//! Unofficial; not affiliated with or endorsed by Intech Studio.
 
 mod selector;
 
@@ -12,7 +15,11 @@ use selector::Selector;
 #[derive(Parser)]
 #[command(
     name = "gridctl",
-    about = "Configure Intech Studio Grid controllers (EN16, PBF4, PO16, BU16)",
+    about = "Configure and control Intech Studio Grid controllers (unofficial)",
+    long_about = "Configure and control Intech Studio Grid controllers over USB: \
+                  LED colours, element settings, live knob modes and animation, \
+                  whole-config dump/restore and firmware updates.\n\n\
+                  Unofficial: not affiliated with or endorsed by Intech Studio.",
     version,
     after_help = "Colours accept a name (red, green, blue, yellow, purple, white, cyan, orange, pink, lila, teal, amber, off), \
 #rrggbb, rrggbb, #rgb or r,g,b.\n\
